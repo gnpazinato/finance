@@ -3,12 +3,11 @@ import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(layout="wide", page_title="Trend Scanner Pro")
+st.set_page_config(layout="wide", page_title="Trend Scanner Pro - Opções")
 
-# --- LISTA DE ATIVOS (SEUS 45 TICKERS) ---
+# --- LISTA DE ATIVOS ---
 TICKERS = [
     "SPY", "QQQ", "IWM", "DIA", "GLD", "SLV", "TLT", "USO", "VOO", "XLF", 
     "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA",
@@ -17,179 +16,163 @@ TICKERS = [
     "PFE", "HD", "MCD", "NKE", "WMT", "COST", "PG", "CAT", "BA", "XOM"
 ]
 
-# --- FUNÇÃO PARA PEGAR DADOS (COM CACHE PARA NÃO FICAR LENTO) ---
-@st.cache_data(ttl=900) # Atualiza a cada 15 minutos
+# --- FUNÇÃO PARA PEGAR DADOS ---
+@st.cache_data(ttl=900) 
 def get_data(tickers):
     data = yf.download(tickers, period="1y", interval="1d", group_by='ticker', auto_adjust=True)
     return data
 
-# --- FUNÇÃO DE ANÁLISE TÉCNICA ---
+# --- FUNÇÃO DE ANÁLISE TÉCNICA (LÓGICA DE OPÇÕES) ---
 def analyze_ticker(ticker, df):
-    # Verifica se há dados suficientes
     if df.empty or len(df) < 200:
         return None
     
-    # Cálculos de Indicadores
+    # Indicadores
     close = df['Close']
     high = df['High']
     low = df['Low']
     
-    # Médias Móveis
     ma20 = ta.sma(close, length=20)
     ma50 = ta.sma(close, length=50)
     ma200 = ta.sma(close, length=200)
-    
-    # RSI (Índice de Força Relativa) - Bom para Pullbacks
     rsi = ta.rsi(close, length=14)
     
-    # Donchian Channels (Para Rompimentos) - Máxima dos últimos 20 dias
+    # Donchian (Canais de Preço) para Rompimentos
     donchian_high = high.rolling(window=20).max()
     donchian_low = low.rolling(window=20).min()
     
-    # Pega o último valor válido
+    # Valores Atuais
     curr_price = close.iloc[-1]
     curr_ma20 = ma20.iloc[-1]
     curr_ma50 = ma50.iloc[-1]
     curr_ma200 = ma200.iloc[-1]
     curr_rsi = rsi.iloc[-1]
-    prev_high_20 = donchian_high.iloc[-2] # Máxima de ontem (para ver se rompeu hoje)
+    prev_high_20 = donchian_high.iloc[-2]
+    prev_low_20 = donchian_low.iloc[-2]
     
-    # --- LÓGICA DE CLASSIFICAÇÃO (CÉREBRO DO SCRIPT) ---
-    setup = "Neutro"
-    prazo = "Indefinido"
-    cor = "white"
+    # --- CÉREBRO DA ESTRATÉGIA ---
+    tendencia = "Lateral/Indefinida"
+    sugestao_opcao = "Aguardar"
+    vencimento_ideal = "-"
+    motivo = "-"
+    cor_fundo = "white"
+    cor_texto = "black"
 
-    # 1. TENDÊNCIA DE ALTA (Filtro Base: Preço > MA50 > MA200)
-    if curr_ma50 > curr_ma200 and curr_price > curr_ma200:
+    # 1. TENDÊNCIA DE ALTA (Preço acima da MA200)
+    if curr_price > curr_ma200 and curr_ma50 > curr_ma200:
+        tendencia = "Alta (Bullish)"
         
-        # Cenário A: ROMPIMENTO (Preço rompeu a máxima de 20 dias e está forte)
+        # A) ROMPIMENTO DE ALTA (MOMENTUM)
+        # Preço rompeu a máxima de 20 dias
         if curr_price > prev_high_20:
-            setup = "🚀 Rompimento de Alta"
-            prazo = "Curto Prazo (Explosão)"
-            cor = "#90ee90" # Light Green
+            sugestao_opcao = "COMPRA SECO DE CALL"
+            motivo = "Rompimento Explosivo"
+            vencimento_ideal = "15-30 Dias"
+            cor_fundo = "#b6d7a8" # Verde Claro
             
-        # Cenário B: PULLBACK (Preço está acima da MA50, mas recuou perto da MA20 ou RSI < 50)
-        elif (curr_price < curr_ma20 * 1.02) and (curr_rsi < 55) and (curr_rsi > 40):
-            setup = "🛒 Pullback de Alta"
-            prazo = "Médio Prazo (Entrada Segura)"
-            cor = "#006400" # Dark Green (Texto Branco idealmente)
+        # B) PULLBACK DE ALTA (OPORTUNIDADE)
+        # Preço recuou perto da MA20 ou MA50, mas a tendência é alta
+        elif (curr_price <= curr_ma20 * 1.02) and (curr_rsi < 60) and (curr_rsi > 40):
+            sugestao_opcao = "TRAVA DE ALTA (Call Spread)"
+            motivo = "Correção na Tendência"
+            vencimento_ideal = "30-45 Dias"
+            cor_fundo = "#6aa84f" # Verde Escuro
+            cor_texto = "white"
 
-    # 2. TENDÊNCIA DE BAIXA (Filtro Base: Preço < MA50 < MA200)
-    elif curr_ma50 < curr_ma200 and curr_price < curr_ma200:
+    # 2. TENDÊNCIA DE BAIXA (Preço abaixo da MA200)
+    elif curr_price < curr_ma200 and curr_ma50 < curr_ma200:
+        tendencia = "Baixa (Bearish)"
         
-        # Cenário C: ROMPIMENTO BAIXA (Perdeu fundo)
-        if curr_price < donchian_low.iloc[-2]:
-            setup = "🔻 Rompimento de Baixa"
-            prazo = "Curto Prazo (Queda Rápida)"
-            cor = "#ffcccb" # Light Red
+        # C) ROMPIMENTO DE BAIXA (CRASH)
+        # Preço perdeu a mínima de 20 dias
+        if curr_price < prev_low_20:
+            sugestao_opcao = "COMPRA SECO DE PUT"
+            motivo = "Perda de Suporte"
+            vencimento_ideal = "15-30 Dias"
+            cor_fundo = "#ea9999" # Vermelho Claro
             
-        # Cenário D: PULLBACK DE BAIXA (Repique até a média para cair mais)
-        elif (curr_price > curr_ma20 * 0.98) and (curr_rsi > 45):
-            setup = "🐻 Pullback de Baixa"
-            prazo = "Médio Prazo (Venda/Put)"
-            cor = "#8b0000" # Dark Red
+        # D) PULLBACK DE BAIXA (RESPIRO)
+        # Preço subiu até a média para cair de novo
+        elif (curr_price >= curr_ma20 * 0.98) and (curr_rsi > 40) and (curr_rsi < 60):
+            sugestao_opcao = "TRAVA DE BAIXA (Put Spread)"
+            motivo = "Repique na Tendência"
+            vencimento_ideal = "30-45 Dias"
+            cor_fundo = "#990000" # Vermelho Escuro
+            cor_texto = "white"
 
     return {
         "Ticker": ticker,
         "Preço": round(curr_price, 2),
-        "RSI": round(curr_rsi, 0),
-        "Tendência (MA50/200)": "Alta" if curr_ma50 > curr_ma200 else "Baixa",
-        "Setup Identificado": setup,
-        "Horizonte Sugerido": prazo
+        "Tendência Macro": tendência,
+        "Estratégia Opções": sugestao_opcao,
+        "Setup (Motivo)": motivo,
+        "Vencimento Sugerido": vencimento_ideal,
+        "_cor_fundo": cor_fundo, # Coluna oculta para formatação
+        "_cor_texto": cor_texto  # Coluna oculta para formatação
     }
 
 # --- INTERFACE PRINCIPAL ---
-st.title("📈 Trend Scanner Pro - Opções & Ações")
-st.markdown("Monitor de Rompimentos e Pullbacks em tempo real (delay de 15min).")
+st.title("🎯 Opções Trend Scanner")
+st.markdown("Focado em identificar setups para **Compra a Seco** (Explosão) ou **Travas** (Correção).")
 
-if st.button("🔄 Atualizar Dados do Mercado"):
+if st.button("🔄 Atualizar Mercado"):
     st.cache_data.clear()
 
-# Loading
-with st.spinner('Baixando dados do Yahoo Finance...'):
+with st.spinner('Analisando 45 ativos...'):
     raw_data = get_data(TICKERS)
 
-# Processamento
 results = []
 for ticker in TICKERS:
     try:
-        # yfinance retorna MultiIndex, precisamos isolar o ticker
         df_ticker = raw_data[ticker].dropna()
         res = analyze_ticker(ticker, df_ticker)
         if res:
             results.append(res)
-    except Exception as e:
+    except Exception:
         continue
 
-# Cria DataFrame
 df_results = pd.DataFrame(results)
 
-# --- FILTROS LATERAIS ---
-st.sidebar.header("Filtros")
-filtro_setup = st.sidebar.multiselect(
-    "Filtrar por Tipo de Setup:",
-    options=df_results["Setup Identificado"].unique(),
-    default=df_results["Setup Identificado"].unique()
-)
+# --- FILTROS ---
+st.sidebar.header("Filtros de Estratégia")
+tipos_estrategia = df_results["Estratégia Opções"].unique()
+filtro = st.sidebar.multiselect("Mostrar apenas:", tipos_estrategia, default=[x for x in tipos_estrategia if x != "Aguardar"])
 
-# Filtrar Tabela
-df_final = df_results[df_results["Setup Identificado"].isin(filtro_setup)]
+if not filtro:
+    df_final = df_results
+else:
+    df_final = df_results[df_results["Estratégia Opções"].isin(filtro)]
 
-# Exibir Tabela (Scanner)
-st.subheader("🔭 Scanner de Oportunidades")
+# --- TABELA COLORIDA ---
+def style_dataframe(row):
+    return [f'background-color: {row["_cor_fundo"]}; color: {row["_cor_texto"]}' for _ in row]
 
-def color_setup(val):
-    color = 'white'
-    if 'Rompimento de Alta' in val: color = '#cfdac8' # Verde claro
-    elif 'Pullback de Alta' in val: color = '#90ee90' # Verde forte
-    elif 'Rompimento de Baixa' in val: color = '#f4cccc' # Vermelho claro
-    elif 'Pullback de Baixa' in val: color = '#ea9999' # Vermelho forte
-    return f'background-color: {color}; color: black'
+st.subheader("Mesa de Operações")
+# Remove colunas de cor antes de mostrar
+display_cols = [c for c in df_final.columns if not c.startswith("_")]
 
 st.dataframe(
-    df_final.style.applymap(color_setup, subset=['Setup Identificado']),
+    df_final[display_cols].style.apply(style_dataframe, axis=1),
     use_container_width=True,
-    height=500
+    height=600
 )
 
-# --- ANÁLISE INDIVIDUAL (GRÁFICO) ---
+# --- GRÁFICO ---
 st.divider()
-st.subheader("🔍 Análise Individual")
+st.subheader("🔍 Validação Visual")
+selected = st.selectbox("Selecione para ver o gráfico:", TICKERS)
 
-selected_ticker = st.selectbox("Selecione um ativo para ver o gráfico:", TICKERS)
-
-if selected_ticker:
-    df_chart = raw_data[selected_ticker].dropna()
-    
-    # Médias para o gráfico
+if selected:
+    df_chart = raw_data[selected].dropna()
     df_chart['MA20'] = ta.sma(df_chart['Close'], length=20)
     df_chart['MA50'] = ta.sma(df_chart['Close'], length=50)
-    
-    # Criação do Gráfico Plotly
+    df_chart['MA200'] = ta.sma(df_chart['Close'], length=200)
+
     fig = go.Figure()
+    fig.add_trace(go.Candlestick(x=df_chart.index, open=df_chart['Open'], high=df_chart['High'], low=df_chart['Low'], close=df_chart['Close'], name='Preço'))
+    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['MA20'], line=dict(color='orange', width=1), name='MA20'))
+    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['MA50'], line=dict(color='blue', width=2), name='MA50'))
+    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['MA200'], line=dict(color='black', width=2, dash='dot'), name='MA200 (Tendência Macro)'))
     
-    # Candles
-    fig.add_trace(go.Candlestick(
-        x=df_chart.index,
-        open=df_chart['Open'], high=df_chart['High'],
-        low=df_chart['Low'], close=df_chart['Close'],
-        name='Preço'
-    ))
-    
-    # Médias
-    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['MA20'], line=dict(color='orange', width=1), name='MA20 (Curto)'))
-    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['MA50'], line=dict(color='blue', width=2), name='MA50 (Médio)'))
-    
-    fig.update_layout(title=f"Gráfico Diário - {selected_ticker}", xaxis_rangeslider_visible=False, height=600)
-    
+    fig.update_layout(title=f"{selected} - Gráfico Diário", xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
-    
-    # Mostra dados recentes
-    last_close = df_chart['Close'].iloc[-1]
-    last_ma20 = df_chart['MA20'].iloc[-1]
-    dist_ma20 = ((last_close / last_ma20) - 1) * 100
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Preço Atual", f"${last_close:.2f}")
-    col2.metric("Distância da MA20", f"{dist_ma20:.2f}%", help="Se estiver muito longe (>5%), cuidado com rompimentos, pode estar esticado.")
-    col3.metric("RSI (14)", f"{ta.rsi(df_chart['Close']).iloc[-1]:.0f}", help="RSI < 30 (Sobrevendido), RSI > 70 (Sobrecomprado)")
