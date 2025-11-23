@@ -287,14 +287,13 @@ if not df_results.empty and "Estratégia" in df_results.columns:
     st.subheader("Oportunidades Identificadas")
 
     # Tabela estilizada (esconde colunas técnicas)
-    st.dataframe(
-        df_final.style.apply(apply_style, axis=1).hide(
-            axis="columns",
-            subset=["_cor_fundo", "_cor_texto"]
-        ),
-        use_container_width=True,
-        height=600
-    )
+    df_show = df_final.drop(columns=["_cor_fundo", "_cor_texto"])
+
+st.dataframe(
+    df_show.style.apply(apply_style, axis=1),
+    use_container_width=True,
+    height=600
+)
 
     # Botão para exportar sinais em CSV
     st.download_button(
