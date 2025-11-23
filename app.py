@@ -81,7 +81,6 @@ def get_macro_alerts(current_date: date):
     if isinstance(current_date, pd.Timestamp):
         current_date = current_date.date()
     
-    # Se não tiver data (ex: fim de semana), assume hoje para fins de teste
     if not current_date:
         current_date = datetime.now().date()
 
@@ -92,7 +91,6 @@ def get_macro_alerts(current_date: date):
             days_until = (ev_date - current_date).days
             
             if 0 <= days_until <= NEWS_WINDOW_DAYS:
-                # Busca a explicação no dicionário
                 explanation = EVENT_GUIDE.get(ev["name"], "Alta volatilidade esperada.")
                 alerts.append({
                     "event": f"{ev['name']} ({ev['date']})",
@@ -242,7 +240,7 @@ def analyze_ticker(ticker, df):
             "Vencimento": vencimento,
             "Motivo": motivo,
             "Filtro_OK": filtro_ok,
-            "Score": score, # Novo campo numérico para o termômetro
+            "Score": score, # Para o termômetro
             "_cor_fundo": cor_fundo,
             "_cor_texto": cor_texto
         }
@@ -271,7 +269,6 @@ results = []
 alerts_to_show = []
 
 if raw_data is not None and not raw_data.empty:
-    # Verifica alertas macro
     current_date = raw_data.index[-1]
     alerts_to_show = get_macro_alerts(current_date)
     
@@ -366,22 +363,30 @@ if not df_results.empty:
         else:
             df_show = df_valid.copy()
 
+        # Reset Index para 1, 2, 3...
         df_show.reset_index(drop=True, inplace=True)
         df_show.index = df_show.index + 1
         
+        # Colunas para exibir (apenas as colunas finais visíveis)
         cols_to_show = ["Ticker", "Preço", "Estratégia", "Strikes (Ref)", "Vencimento", "Motivo"]
         
-        def color_rows(row):
-            bg = row["_cor_fundo"]
-            txt = row["_cor_texto"]
-            return [f'background-color: {bg}; color: {txt}' for _ in row.index]
+        # Função de estilo que usa o índice para acessar o DF original (df_show)
+        def apply_row_colors(row):
+            # Pega o índice da linha sendo estilizada
+            idx = row.name 
+            # Acessa a cor correspondente no DataFrame original
+            bg_color = df_show.loc[idx, "_cor_fundo"]
+            text_color = df_show.loc[idx, "_cor_texto"]
+            return [f'background-color: {bg_color}; color: {text_color}' for _ in row]
 
+        # Aplica o estilo apenas nas colunas visíveis
+        # ATENÇÃO: Passamos apenas as colunas visíveis para o style, mas a função lambda usa o índice para buscar a cor no df_show completo
         st.dataframe(
-            df_show.style.apply(color_rows, axis=1),
-            column_order=cols_to_show,
+            df_show[cols_to_show].style.apply(apply_row_colors, axis=1),
             use_container_width=True,
             height=600
         )
+
 else:
     st.error("Erro ao carregar dados.")
 
