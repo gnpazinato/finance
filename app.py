@@ -26,7 +26,6 @@ def get_data(tickers):
 def analyze_ticker(ticker, df):
     if df.empty or len(df) < 200: return None
     
-    # Limpeza de MultiIndex
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(-1)
     
@@ -72,19 +71,17 @@ def analyze_ticker(ticker, df):
             sugestao = "COMPRA CALL (Seco)"
             motivo = "Rompimento Explosivo"
             vencimento = "Curto (15-30d)"
-            # Strike: ATM (No dinheiro)
-            strike_alvo = f"Strike ${curr_price:.0f} (ATM)" 
+            strike_alvo = f"${curr_price:.0f} (ATM)" 
             cor_fundo = "#b6d7a8" # Verde Claro
             
         # B) Pullback (Trava de Alta)
         elif (curr_price <= curr_ma20 * 1.02) and (curr_rsi < 60) and (curr_rsi > 40):
             sugestao = "TRAVA DE ALTA (Call Spread)"
-            motivo = "Correção Saudável"
+            motivo = "Pullback (Correção)"
             vencimento = "Médio (30-45d)"
-            # Trava: Compra ATM / Vende OTM (+4%)
             strike_long = curr_price
             strike_short = curr_price * 1.04
-            strike_alvo = f"C: ${strike_long:.0f} / V: ${strike_short:.0f}"
+            strike_alvo = f"C:${strike_long:.0f} / V:${strike_short:.0f}"
             cor_fundo = "#38761d" # Verde Escuro
             cor_texto = "white"
 
@@ -96,8 +93,7 @@ def analyze_ticker(ticker, df):
             sugestao = "COMPRA PUT (Seco)"
             motivo = "Perda de Suporte"
             vencimento = "Curto (15-30d)"
-            # Strike: ATM
-            strike_alvo = f"Strike ${curr_price:.0f} (ATM)"
+            strike_alvo = f"${curr_price:.0f} (ATM)"
             cor_fundo = "#ea9999" # Vermelho Claro
             
         # D) Pullback de Baixa (Trava de Baixa)
@@ -105,10 +101,9 @@ def analyze_ticker(ticker, df):
             sugestao = "TRAVA DE BAIXA (Put Spread)"
             motivo = "Repique p/ Cair"
             vencimento = "Médio (30-45d)"
-            # Trava: Compra ATM / Vende OTM (-4%)
             strike_long = curr_price
             strike_short = curr_price * 0.96
-            strike_alvo = f"C: ${strike_long:.0f} / V: ${strike_short:.0f}"
+            strike_alvo = f"C:${strike_long:.0f} / V:${strike_short:.0f}"
             cor_fundo = "#990000" # Vermelho Escuro
             cor_texto = "white"
 
@@ -116,7 +111,7 @@ def analyze_ticker(ticker, df):
         "Ticker": ticker,
         "Preço": f"${curr_price:.2f}",
         "Estratégia": sugestao,
-        "Strikes (Ref)": strike_alvo, # Nova Coluna
+        "Strikes (Ref)": strike_alvo,
         "Vencimento": vencimento,
         "Motivo": motivo,
         "_cor_fundo": cor_fundo,
@@ -125,7 +120,6 @@ def analyze_ticker(ticker, df):
 
 # --- INTERFACE ---
 st.title("🎯 Trend Scanner - Opções (Strikes & Prazos)")
-st.info("💡 Os 'Strikes (Ref)' são matemáticos baseados no preço atual. Procure na sua corretora o strike mais próximo desse valor.")
 
 if st.button("🔄 Atualizar Scanner"):
     st.cache_data.clear()
@@ -153,20 +147,32 @@ if not df_results.empty and "Estratégia" in df_results.columns:
     opcoes = df_results["Estratégia"].unique()
     filtro = st.sidebar.multiselect("Filtrar por Operação:", options=opcoes, default=[x for x in opcoes if x != "Aguardar"])
     
+    # Aplica Filtro
     if filtro:
-        df_final = df_results[df_results["Estratégia"].isin(filtro)]
+        df_final = df_results[df_results["Estratégia"].isin(filtro)].copy() # .copy() evita Warning
     else:
-        df_final = df_results
+        df_final = df_results.copy()
+
+    # Reset Index (Corrige a numeração pulada)
+    df_final.reset_index(drop=True, inplace=True)
 
     # Estilização Segura
     def apply_style(row):
-        return [f'background-color: {row["_cor_fundo"]}; color: {row["_cor_texto"]}' for _ in row]
+        # Define a cor baseada nas colunas ocultas
+        bg = row["_cor_fundo"]
+        txt = row["_cor_texto"]
+        # Retorna uma lista de estilos para as colunas VISÍVEIS apenas
+        # (Isso evita o erro de aplicar estilo em colunas que não serão mostradas)
+        return [f'background-color: {bg}; color: {txt}' for _ in display_cols]
 
     st.subheader("Oportunidades Identificadas")
     
-    # Mostra a tabela escondendo as colunas de controle de cor
+    # Define as colunas que serão exibidas (remove as com underline)
+    display_cols = [c for c in df_final.columns if not c.startswith("_")]
+    
+    # Aplica o estilo APENAS no subset das colunas visíveis
     st.dataframe(
-        df_final.style.apply(apply_style, axis=1).hide(axis="columns", subset=["_cor_fundo", "_cor_texto"]),
+        df_final[display_cols].style.apply(apply_style, axis=1),
         use_container_width=True,
         height=600
     )
