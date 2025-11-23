@@ -26,6 +26,7 @@ def get_data(tickers):
 def analyze_ticker(ticker, df):
     if df.empty or len(df) < 200: return None
     
+    # Limpeza de MultiIndex
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(-1)
     
@@ -147,32 +148,29 @@ if not df_results.empty and "Estratégia" in df_results.columns:
     opcoes = df_results["Estratégia"].unique()
     filtro = st.sidebar.multiselect("Filtrar por Operação:", options=opcoes, default=[x for x in opcoes if x != "Aguardar"])
     
-    # Aplica Filtro
+    # Cria uma cópia para não afetar o original
     if filtro:
-        df_final = df_results[df_results["Estratégia"].isin(filtro)].copy() # .copy() evita Warning
+        df_final = df_results[df_results["Estratégia"].isin(filtro)].copy()
     else:
         df_final = df_results.copy()
 
-    # Reset Index (Corrige a numeração pulada)
+    # 1. Reseta o índice para ficar 0, 1, 2, 3...
     df_final.reset_index(drop=True, inplace=True)
+    # Opcional: Ajustar índice para começar em 1 visualmente
+    df_final.index = df_final.index + 1
 
     # Estilização Segura
     def apply_style(row):
-        # Define a cor baseada nas colunas ocultas
         bg = row["_cor_fundo"]
         txt = row["_cor_texto"]
-        # Retorna uma lista de estilos para as colunas VISÍVEIS apenas
-        # (Isso evita o erro de aplicar estilo em colunas que não serão mostradas)
-        return [f'background-color: {bg}; color: {txt}' for _ in display_cols]
+        # Aplica estilo em TUDO, depois esconderemos as colunas técnicas
+        return [f'background-color: {bg}; color: {txt}' for _ in row]
 
     st.subheader("Oportunidades Identificadas")
     
-    # Define as colunas que serão exibidas (remove as com underline)
-    display_cols = [c for c in df_final.columns if not c.startswith("_")]
-    
-    # Aplica o estilo APENAS no subset das colunas visíveis
+    # 2. Aplica estilo no DF inteiro e USA .hide() para esconder as colunas de controle
     st.dataframe(
-        df_final[display_cols].style.apply(apply_style, axis=1),
+        df_final.style.apply(apply_style, axis=1).hide(axis="columns", subset=["_cor_fundo", "_cor_texto"]),
         use_container_width=True,
         height=600
     )
