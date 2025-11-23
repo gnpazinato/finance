@@ -116,7 +116,7 @@ def analyze_ticker(ticker, df):
         donchian_high = high.rolling(window=DONCHIAN_LEN).max()
         donchian_low = low.rolling(window=DONCHIAN_LEN).min()
 
-        # Pega os valores atuais (última barra) com proteção
+        # Pega os valores atuais (última barra)
         curr_price = close.iloc[-1]
         curr_ma20 = ma20.iloc[-1]
         curr_ma50 = ma50.iloc[-1]
@@ -239,7 +239,7 @@ if raw_data is not None and not raw_data.empty:
 df_results = pd.DataFrame(results)
 
 # ============================================================
-# RESUMO + TABELA DE OPORTUNIDADES
+# RESUMO + TERMÔMETRO + EXPOSIÇÃO + TABELA
 # ============================================================
 
 if not df_results.empty and "Estratégia" in df_results.columns:
@@ -257,6 +257,89 @@ if not df_results.empty and "Estratégia" in df_results.columns:
     for col, est in zip(cols, estrategias_prioritarias):
         qtd = (df_results["Estratégia"] == est).sum()
         col.metric(est, qtd)
+
+    # ===== SCORE DIRECIONAL & EXPOSIÇÃO (USANDO TODOS OS ATIVOS) =====
+    score_map = {
+        "COMPRA CALL (Seco)": 2,
+        "TRAVA DE ALTA (Call Spread)": 1,
+        "COMPRA PUT (Seco)": -2,
+        "TRAVA DE BAIXA (Put Spread)": -1,
+        "Aguardar": 0
+    }
+
+    df_results["ScoreDirecional"] = df_results["Estratégia"].map(score_map).fillna(0)
+    score_medio = df_results["ScoreDirecional"].mean()
+    total_sinais = len(df_results)
+
+    # Inputs de risco na sidebar
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📉 Gestão de Exposição")
+
+    capital = st.sidebar.number_input("Capital total (USD):", value=10000.0, step=100.0)
+    risco_pct = st.sidebar.number_input("Risco por operação (%):", value=1.0, step=0.5)
+    limite_trades = st.sidebar.number_input("Limite máximo de trades:", value=5, step=1)
+
+    risco_unit = capital * (risco_pct / 100.0)
+
+    # Exposição planejada se entrar em todos os sinais
+    exposicao_total_planejada = total_sinais * risco_unit
+    exposicao_direcional = df_results["ScoreDirecional"].sum() * risco_unit
+
+    # Interpretação do termômetro
+    if score_medio > 1:
+        sentimento = "Mercado com forte viés de ALTA (bullish concentrado)."
+    elif score_medio > 0.3:
+        sentimento = "Mercado com viés de alta."
+    elif score_medio < -1:
+        sentimento = "Mercado com forte viés de BAIXA (bearish concentrado)."
+    elif score_medio < -0.3:
+        sentimento = "Mercado com viés de baixa."
+    else:
+        sentimento = "Mercado mais neutro / indefinido pelos sinais do scanner."
+
+    # Emojis de cor da exposição direcional
+    if exposicao_direcional > 0:
+        emoji_dir = "🟢"
+        dir_txt = "Risco agregado apontando para movimentos de ALTA."
+    elif exposicao_direcional < 0:
+        emoji_dir = "🔴"
+        dir_txt = "Risco agregado apontando para movimentos de BAIXA."
+    else:
+        emoji_dir = "⚪"
+        dir_txt = "Risco agregado próximo de neutro."
+
+    # Termômetro (métrica principal)
+    st.metric(
+        "Termômetro Direcional (Score médio)",
+        f"{score_medio:.2f}",
+        sentimento
+    )
+
+    # Resumo de exposição (abaixo do termômetro)
+    st.markdown(
+        f"""
+**Resumo de Exposição (considerando todos os sinais):**
+
+{emoji_dir} **Exposição Direcional estimada:** `${exposicao_direcional:,.2f}`  
+💰 **Exposição Total planejada (se entrar em todos os sinais):** `${exposicao_total_planejada:,.2f}`  
+
+_{sentimento}_  
+_{dir_txt}_
+        """
+    )
+
+    # Resumo também na sidebar
+    st.sidebar.markdown(f"**Sinais totais:** {total_sinais}")
+    st.sidebar.markdown(f"**Risco unitário por operação:** `${risco_unit:,.2f}`")
+    st.sidebar.markdown(f"{emoji_dir} **Exposição Direcional:** `${exposicao_direcional:,.2f}`")
+    st.sidebar.markdown(f"💰 **Exposição Total planejada:** `${exposicao_total_planejada:,.2f}`")
+
+    if total_sinais > limite_trades:
+        st.sidebar.error("🚨 A quantidade de sinais excede o limite de trades simultâneos definido.")
+    else:
+        st.sidebar.success("Quantidade de sinais dentro do limite definido. ✔")
+
+    # ===== FILTROS E TABELA DE OPORTUNIDADES =====
 
     # Filtros na sidebar
     opcoes = df_results["Estratégia"].unique()
@@ -296,7 +379,7 @@ if not df_results.empty and "Estratégia" in df_results.columns:
 
     st.dataframe(
         styled,
-        width="stretch",
+        use_container_width=True,
         height=600
     )
 
@@ -364,6 +447,15 @@ if sel:
             y=df_chart["MA50"],
             line=dict(color="blue"),
             name=f"MA{MA_MEDIUM} (Tendência)"
+        ))
+
+        # --- Donchian High no gráfico (máxima 20d) ---
+        donchian_high_chart = df_chart["High"].rolling(window=DONCHIAN_LEN).max()
+        fig.add_trace(go.Scatter(
+            x=df_chart.index,
+            y=donchian_high_chart,
+            line=dict(color="green", width=1, dash="dot"),
+            name=f"Resistência {DONCHIAN_LEN}d (Rompimento)"
         ))
 
         fig.update_layout(
