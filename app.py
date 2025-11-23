@@ -4,7 +4,7 @@ import pandas as pd
 import pandas_ta as ta
 import plotly.graph_objects as go
 
-# --- CONFIGURAÇÃO DA PÁGINA ---
+# --- CONFIGURAÇÃO ---
 st.set_page_config(layout="wide", page_title="Trend Scanner Pro - Opções")
 
 # --- LISTA DE ATIVOS ---
@@ -16,27 +16,21 @@ TICKERS = [
     "PFE", "HD", "MCD", "NKE", "WMT", "COST", "PG", "CAT", "BA", "XOM"
 ]
 
-# --- FUNÇÃO PARA PEGAR DADOS ---
+# --- DADOS ---
 @st.cache_data(ttl=900) 
 def get_data(tickers):
-    # threads=True acelera o download
     data = yf.download(tickers, period="1y", interval="1d", group_by='ticker', auto_adjust=True, threads=True)
     return data
 
-# --- FUNÇÃO DE ANÁLISE TÉCNICA ---
+# --- ANÁLISE TÉCNICA & ESTRATÉGIA ---
 def analyze_ticker(ticker, df):
-    # Validações iniciais
-    if df.empty or len(df) < 200:
-        return None
+    if df.empty or len(df) < 200: return None
     
-    # Remove MultiIndex nas colunas se houver
+    # Limpeza de MultiIndex
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(-1)
-        
-    # Garante colunas necessárias
-    req_cols = ['Close', 'High', 'Low']
-    if not all(c in df.columns for c in req_cols):
-        return None
+    
+    if not {'Close', 'High', 'Low'}.issubset(df.columns): return None
 
     # Indicadores
     close = df['Close']
@@ -51,7 +45,6 @@ def analyze_ticker(ticker, df):
     donchian_high = high.rolling(window=20).max()
     donchian_low = low.rolling(window=20).min()
     
-    # Tenta pegar o último valor (trata erro se dataframe estiver quebrado no final)
     try:
         curr_price = close.iloc[-1]
         curr_ma20 = ma20.iloc[-1]
@@ -63,77 +56,91 @@ def analyze_ticker(ticker, df):
     except:
         return None
     
-    # --- CÉREBRO DA ESTRATÉGIA ---
-    tendencia = "Indefinida"
-    sugestao_opcao = "Aguardar"
-    vencimento_ideal = "-"
+    # --- LÓGICA DE DECISÃO ---
+    sugestao = "Aguardar"
     motivo = "-"
+    vencimento = "-"
+    strike_alvo = "-"
     cor_fundo = "white"
     cor_texto = "black"
 
     # 1. TENDÊNCIA DE ALTA
     if curr_price > curr_ma200 and curr_ma50 > curr_ma200:
-        tendencia = "Alta"
         
+        # A) Rompimento (Call Seco)
         if curr_price > prev_high_20:
-            sugestao_opcao = "COMPRA SECO DE CALL"
+            sugestao = "COMPRA CALL (Seco)"
             motivo = "Rompimento Explosivo"
-            vencimento_ideal = "Curto (15-30d)"
+            vencimento = "Curto (15-30d)"
+            # Strike: ATM (No dinheiro)
+            strike_alvo = f"Strike ${curr_price:.0f} (ATM)" 
             cor_fundo = "#b6d7a8" # Verde Claro
             
+        # B) Pullback (Trava de Alta)
         elif (curr_price <= curr_ma20 * 1.02) and (curr_rsi < 60) and (curr_rsi > 40):
-            sugestao_opcao = "TRAVA DE ALTA (Call Spread)"
-            motivo = "Pullback (Correção)"
-            vencimento_ideal = "Médio (30-45d)"
+            sugestao = "TRAVA DE ALTA (Call Spread)"
+            motivo = "Correção Saudável"
+            vencimento = "Médio (30-45d)"
+            # Trava: Compra ATM / Vende OTM (+4%)
+            strike_long = curr_price
+            strike_short = curr_price * 1.04
+            strike_alvo = f"C: ${strike_long:.0f} / V: ${strike_short:.0f}"
             cor_fundo = "#38761d" # Verde Escuro
             cor_texto = "white"
 
     # 2. TENDÊNCIA DE BAIXA
     elif curr_price < curr_ma200 and curr_ma50 < curr_ma200:
-        tendencia = "Baixa"
         
+        # C) Perda de Fundo (Put Seco)
         if curr_price < prev_low_20:
-            sugestao_opcao = "COMPRA SECO DE PUT"
-            motivo = "Perda de Fundo"
-            vencimento_ideal = "Curto (15-30d)"
+            sugestao = "COMPRA PUT (Seco)"
+            motivo = "Perda de Suporte"
+            vencimento = "Curto (15-30d)"
+            # Strike: ATM
+            strike_alvo = f"Strike ${curr_price:.0f} (ATM)"
             cor_fundo = "#ea9999" # Vermelho Claro
             
+        # D) Pullback de Baixa (Trava de Baixa)
         elif (curr_price >= curr_ma20 * 0.98) and (curr_rsi > 40) and (curr_rsi < 60):
-            sugestao_opcao = "TRAVA DE BAIXA (Put Spread)"
-            motivo = "Pullback (Repique)"
-            vencimento_ideal = "Médio (30-45d)"
+            sugestao = "TRAVA DE BAIXA (Put Spread)"
+            motivo = "Repique p/ Cair"
+            vencimento = "Médio (30-45d)"
+            # Trava: Compra ATM / Vende OTM (-4%)
+            strike_long = curr_price
+            strike_short = curr_price * 0.96
+            strike_alvo = f"C: ${strike_long:.0f} / V: ${strike_short:.0f}"
             cor_fundo = "#990000" # Vermelho Escuro
             cor_texto = "white"
 
     return {
         "Ticker": ticker,
-        "Preço": f"{curr_price:.2f}",
-        "Tendência": tendencia,
-        "Estratégia": sugestao_opcao,
+        "Preço": f"${curr_price:.2f}",
+        "Estratégia": sugestao,
+        "Strikes (Ref)": strike_alvo, # Nova Coluna
+        "Vencimento": vencimento,
         "Motivo": motivo,
-        "Vencimento": vencimento_ideal,
         "_cor_fundo": cor_fundo,
         "_cor_texto": cor_texto
     }
 
 # --- INTERFACE ---
-st.title("🎯 Trend Scanner - Opções")
+st.title("🎯 Trend Scanner - Opções (Strikes & Prazos)")
+st.info("💡 Os 'Strikes (Ref)' são matemáticos baseados no preço atual. Procure na sua corretora o strike mais próximo desse valor.")
 
-if st.button("🔄 Atualizar"):
+if st.button("🔄 Atualizar Scanner"):
     st.cache_data.clear()
 
-with st.spinner('Analisando ativos...'):
+with st.spinner('Calculando estratégias para 45 ativos...'):
     raw_data = get_data(TICKERS)
 
 results = []
 for ticker in TICKERS:
     try:
-        # Tenta acessar de forma segura considerando a estrutura do yfinance
         if isinstance(raw_data.columns, pd.MultiIndex) and ticker in raw_data.columns.get_level_values(0):
             df_t = raw_data[ticker].dropna()
         else:
-            df_t = raw_data
-            
+            df_t = raw_data.dropna()
+        
         res = analyze_ticker(ticker, df_t)
         if res: results.append(res)
     except:
@@ -141,53 +148,50 @@ for ticker in TICKERS:
 
 df_results = pd.DataFrame(results)
 
-if df_results.empty:
-    st.warning("Nenhum dado encontrado. O Yahoo Finance pode estar instável.")
-else:
+if not df_results.empty and "Estratégia" in df_results.columns:
     # Filtros
-    if "Estratégia" in df_results.columns:
-        opcoes = df_results["Estratégia"].unique()
-        filtro = st.sidebar.multiselect("Filtrar:", options=opcoes, default=[x for x in opcoes if x != "Aguardar"])
-        
-        if filtro:
-            df_final = df_results[df_results["Estratégia"].isin(filtro)]
-        else:
-            df_final = df_results
-
-        # Função de Estilo
-        def apply_style(row):
-            # Pinta a linha inteira com base nas colunas ocultas
-            return [f'background-color: {row["_cor_fundo"]}; color: {row["_cor_texto"]}' for _ in row]
-
-        st.subheader("Scanner")
-        
-        # Aplica o estilo E DEPOIS esconde as colunas técnicas
-        st.dataframe(
-            df_final.style.apply(apply_style, axis=1).hide(axis="columns", subset=["_cor_fundo", "_cor_texto"]),
-            use_container_width=True,
-            height=600
-        )
+    opcoes = df_results["Estratégia"].unique()
+    filtro = st.sidebar.multiselect("Filtrar por Operação:", options=opcoes, default=[x for x in opcoes if x != "Aguardar"])
+    
+    if filtro:
+        df_final = df_results[df_results["Estratégia"].isin(filtro)]
     else:
-        st.error("Erro ao processar colunas.")
+        df_final = df_results
 
-# --- GRÁFICO ---
+    # Estilização Segura
+    def apply_style(row):
+        return [f'background-color: {row["_cor_fundo"]}; color: {row["_cor_texto"]}' for _ in row]
+
+    st.subheader("Oportunidades Identificadas")
+    
+    # Mostra a tabela escondendo as colunas de controle de cor
+    st.dataframe(
+        df_final.style.apply(apply_style, axis=1).hide(axis="columns", subset=["_cor_fundo", "_cor_texto"]),
+        use_container_width=True,
+        height=600
+    )
+    
+else:
+    st.warning("Nenhum dado ou erro na conexão. Tente atualizar novamente.")
+
+# --- ÁREA DE GRÁFICO ---
 st.divider()
-sel = st.selectbox("Ver Gráfico:", TICKERS)
+sel = st.selectbox("Analisar Gráfico:", TICKERS)
 if sel:
     try:
-        if isinstance(raw_data.columns, pd.MultiIndex) and sel in raw_data.columns.get_level_values(0):
+        if isinstance(raw_data.columns, pd.MultiIndex):
             df_chart = raw_data[sel].dropna()
         else:
-            df_chart = raw_data.dropna() # Fallback
-            
+            df_chart = raw_data.dropna()
+
         df_chart['MA20'] = ta.sma(df_chart['Close'], length=20)
         df_chart['MA50'] = ta.sma(df_chart['Close'], length=50)
 
         fig = go.Figure()
         fig.add_trace(go.Candlestick(x=df_chart.index, open=df_chart['Open'], high=df_chart['High'], low=df_chart['Low'], close=df_chart['Close'], name='Preço'))
-        fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['MA20'], line=dict(color='orange'), name='MA20'))
-        fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['MA50'], line=dict(color='blue'), name='MA50'))
-        fig.update_layout(xaxis_rangeslider_visible=False)
+        fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['MA20'], line=dict(color='orange'), name='MA20 (Curto)'))
+        fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['MA50'], line=dict(color='blue'), name='MA50 (Tendência)'))
+        fig.update_layout(xaxis_rangeslider_visible=False, title=f"{sel} - Gráfico Diário")
         st.plotly_chart(fig, use_container_width=True)
     except:
-        st.error("Dados insuficientes para o gráfico.")
+        st.error("Gráfico indisponível.")
