@@ -410,46 +410,119 @@ if not df_results.empty:
     df_valid = df_results[df_results["Filtro_OK"] == True].copy()
 
     if not df_valid.empty:
-        # Calcula a média dos scores (-2 a +2)
-        avg_score = df_valid["Score"].mean()
-
         st.divider()
-        st.subheader("🌡️ Termômetro de Sentimento do Mercado")
+        st.subheader("🌡️ Termômetro Institucional de Sentimento do Mercado (0–100)")
+
+        # ---------- COMPONENTES DO SCORE ----------
+        total_sinais = len(df_valid)
+        bull_mask = df_valid["Score"] > 0
+        bear_mask = df_valid["Score"] < 0
+
+        bull_count = bull_mask.sum()
+        bear_count = bear_mask.sum()
+        flat_count = total_sinais - bull_count - bear_count
+
+        pct_bull = bull_count / total_sinais if total_sinais > 0 else 0
+        pct_bear = bear_count / total_sinais if total_sinais > 0 else 0
+
+        # força média dos sinais (-2 a +2) → normalizado para [-1, 1]
+        avg_strength_raw = df_valid["Score"].mean()  # [-2, 2]
+        avg_strength_norm = avg_strength_raw / 2.0   # [-1, 1]
+
+        # balance direcional pela quantidade de sinais → [-1, 1]
+        dir_balance = (bull_count - bear_count) / total_sinais if total_sinais > 0 else 0
+
+        # combinação ponderada (dê mais peso à quantidade de sinais)
+        # m fica em torno de [-1, 1]
+        m = 0.6 * dir_balance + 0.4 * avg_strength_norm
+
+        # converte para escala 0–100
+        tm_score = (m + 1) * 50
+        tm_score = max(0, min(100, tm_score))  # clamp
+
+        # ---------- CLASSIFICAÇÃO ----------
+        if tm_score >= 80:
+            label = "EUFORIA (ALTA FORTE)"
+            delta_color = "normal"
+            comentario_curto = "Mercado com forte predominância de sinais de alta e intensidade relevante."
+        elif tm_score >= 60:
+            label = "VIÉS DE ALTA"
+            delta_color = "normal"
+            comentario_curto = "Maioria dos sinais aponta para alta, mas ainda sem euforia extrema."
+        elif tm_score <= 20:
+            label = "PÂNICO / BAIXA FORTE"
+            delta_color = "inverse"
+            comentario_curto = "Predomínio forte de sinais de baixa e ambiente de aversão a risco."
+        elif tm_score <= 40:
+            label = "VIÉS DE BAIXA"
+            delta_color = "inverse"
+            comentario_curto = "Mais sinais de queda do que de alta, tendência de baixa moderada."
+        else:
+            label = "NEUTRO / EQUILIBRADO"
+            delta_color = "off"
+            comentario_curto = "Forças de alta e baixa relativamente equilibradas; atenção ao contexto macro."
+
+        # Percentuais formatados
+        pct_bull_str = f"{pct_bull*100:.0f}%"
+        pct_bear_str = f"{pct_bear*100:.0f}%"
 
         col_term, col_prot = st.columns([1, 2])
 
         with col_term:
-            label = "NEUTRO"
-            delta_color = "off"
-            if avg_score > 0.5:
-                label = "VIÉS DE ALTA"
-                delta_color = "normal"  # verde
-            elif avg_score < -0.5:
-                label = "VIÉS DE BAIXA"
-                delta_color = "inverse"  # vermelho
-
-            st.metric("Sentimento Agregado", f"{label} ({avg_score:.2f})", delta=avg_score, delta_color=delta_color)
+            st.metric(
+                "Score Direcional Agregado",
+                f"{tm_score:.0f}/100",
+                delta=f"{label}",
+                delta_color=delta_color
+            )
+            st.markdown(
+                f"""
+**Composição do Termômetro:**
+- 🔼 **Bullish:** {bull_count} ativos ({pct_bull_str})
+- 🔻 **Bearish:** {bear_count} ativos ({pct_bear_str})
+- ⚪ **Neutros / Aguardar:** {flat_count} ativos
+- 🔎 **Força média dos sinais:** {avg_strength_raw:+.2f} (escala -2 a +2)
+                """
+            )
 
         with col_prot:
-            if avg_score > 1.0:
-                st.warning("⚠️ **ALERTA DE EUFORIA (Mercado Esticado):** Risco de correção.")
-                st.markdown("""
-                **🛡️ Como se Proteger (Hedge):**
-                1. **Não aumente a exposição:** Evite abrir muitas novas Calls agora.
-                2. **Proteção (Hedge):** Considere comprar **Puts de índice (SPY/QQQ) curtas (15-30 dias)**. Se o mercado corrigir, elas valorizam e compensam a queda das Calls.
-                3. **Travas:** Prefira Travas de Alta (risco limitado) a compras secas.
-                """)
-            elif avg_score < -1.0:
-                st.warning("⚠️ **ALERTA DE PÂNICO (Tendência de Baixa):** Cuidado com repiques.")
-                st.markdown("""
-                **🛡️ Como se Proteger (Hedge):**
-                1. **Não tente adivinhar o fundo:** Não compre Calls "porque caiu muito".
-                2. **Proteção:** Se tiver carteira de ações, mantenha **Puts longas** ou venda Calls cobertas (OTM) para gerar caixa.
-                3. **Espere:** Aguarde o score voltar para > -0.5 para pensar em compras.
-                """)
+            st.markdown(f"**Leitura atual:** `{label}`")
+            st.markdown(comentario_curto)
+
+            # Orientações gerais de proteção baseadas no score
+            if tm_score >= 80:
+                st.warning(
+                    "⚠️ **Zona de EUFORIA:** mercado esticado para cima.\n\n"
+                    "- Evite aumentar muito exposição direcional em Calls.\n"
+                    "- Prefira **travas de alta** ao invés de Calls secas.\n"
+                    "- Considere montar **hedges baratos (Puts em índices / Calls em VIX)**.\n"
+                )
+            elif tm_score >= 60:
+                st.info(
+                    "ℹ️ **Viés de Alta:** predominância de sinais bullish.\n\n"
+                    "- Favorável para operações compradas em Calls/Travas de Alta.\n"
+                    "- Já comece a pensar em hedges se a exposição ficar grande.\n"
+                )
+            elif tm_score <= 20:
+                st.warning(
+                    "⚠️ **Zona de Pânico / Baixa Forte:** mercado pressionado para baixo.\n\n"
+                    "- Evite tentar adivinhar fundo comprando Calls muito cedo.\n"
+                    "- Proteja carteiras de ações com **Puts longas** ou **Calls cobertas**.\n"
+                    "- Para quem está vendido, cuidado com short squeeze em repiques fortes.\n"
+                )
+            elif tm_score <= 40:
+                st.info(
+                    "ℹ️ **Viés de Baixa:** mais sinais de queda do que de alta.\n\n"
+                    "- Contexto mais favorável para **Puts** e **Travas de Baixa**.\n"
+                    "- Se estiver muito comprado em ações, pense em hedge parcial.\n"
+                )
             else:
-                st.info("ℹ️ **Mercado Equilibrado:** O viés não está extremo.")
-                st.markdown("Siga os sinais individuais da tabela abaixo com a gestão de risco padrão (1–2% por trade).")
+                st.info(
+                    "ℹ️ **Mercado Neutro / Equilibrado:**\n\n"
+                    "- Evite posições muito alavancadas.\n"
+                    "- Escolha operações mais assimétricas (spreads) e com risco bem definido.\n"
+                    "- Deixe o gerenciamento de risco mais pesado do que o apetite direcional.\n"
+                )
 
 # ------------------------------------------------------------
 # 3. TABELA DE OPORTUNIDADES
