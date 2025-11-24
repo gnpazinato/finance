@@ -81,6 +81,7 @@ def get_macro_alerts(current_date: date):
     if isinstance(current_date, pd.Timestamp):
         current_date = current_date.date()
     
+    # Se não tiver data (ex: fim de semana), assume hoje
     if not current_date:
         current_date = datetime.now().date()
 
@@ -91,6 +92,7 @@ def get_macro_alerts(current_date: date):
             days_until = (ev_date - current_date).days
             
             if 0 <= days_until <= NEWS_WINDOW_DAYS:
+                # Busca a explicação no dicionário
                 explanation = EVENT_GUIDE.get(ev["name"], "Alta volatilidade esperada.")
                 alerts.append({
                     "event": f"{ev['name']} ({ev['date']})",
@@ -269,6 +271,7 @@ results = []
 alerts_to_show = []
 
 if raw_data is not None and not raw_data.empty:
+    # Verifica alertas macro
     current_date = raw_data.index[-1]
     alerts_to_show = get_macro_alerts(current_date)
     
@@ -296,11 +299,14 @@ if alerts_to_show:
     st.divider()
 else:
     st.success("✅ Cenário Macro livre de eventos críticos (FOMC/CPI/Payroll) nos próximos 3 dias.")
+    with st.expander("📅 Ver Próximos Eventos Relevantes"):
+        st.table(pd.DataFrame(MACRO_EVENTS))
 
 # ------------------------------------------------------------
-# 2. TERMÔMETRO DE VIÉS (NOVO)
+# 2. TERMÔMETRO DE VIÉS E PROTEÇÃO
 # ------------------------------------------------------------
 if not df_results.empty:
+    # Filtrar apenas sinais válidos para o termômetro
     df_valid = df_results[df_results["Filtro_OK"] == True].copy()
     
     if not df_valid.empty:
@@ -326,25 +332,26 @@ if not df_results.empty:
             st.metric("Sentimento Agregado", f"{label} ({avg_score:.2f})", delta=avg_score, delta_color=delta_color)
         
         with col_prot:
-            # Lógica de Proteção
+            # Lógica de Proteção (Hedge)
             if avg_score > 1.0:
-                st.warning("⚠️ **ALERTA DE EUFORIA:** O mercado está com viés muito forte de alta. Risco de correção iminente.")
+                st.warning("⚠️ **ALERTA DE EUFORIA (Mercado Esticado):** Risco de correção.")
                 st.markdown("""
-                **🛡️ Sugestão de Proteção:**
-                1. Não aumente a mão em Calls secas agora (já esticou).
-                2. Considere **Travas de Baixa (Put Spreads)** em índices (SPY/QQQ) como *hedge* (seguro) caso o mercado corrija.
-                3. Aperte os Stops das operações vencedoras.
+                **🛡️ Como se Proteger (Hedge):**
+                1. **Não aumente a exposição:** Evite abrir muitas novas Calls agora.
+                2. **Proteção (Hedge):** Considere comprar **Puts de índice (SPY/QQQ) curtas (15-30 dias)**. Se o mercado corrigir, elas valorizam e compensam a queda das Calls.
+                3. **Travas:** Prefira Travas de Alta (risco limitado) a compras secas.
                 """)
             elif avg_score < -1.0:
-                st.warning("⚠️ **ALERTA DE PÂNICO:** O mercado está com viés muito forte de baixa.")
+                st.warning("⚠️ **ALERTA DE PÂNICO (Tendência de Baixa):** Cuidado com repiques.")
                 st.markdown("""
-                **🛡️ Sugestão de Proteção:**
-                1. Não tente adivinhar o fundo (não compre Call seco ainda).
-                2. Se tiver carteira de ações, compre **Puts longas (Proteção)**.
-                3. Espere um sinal de reversão (pivô de alta) antes de entrar agressivo na compra.
+                **🛡️ Como se Proteger (Hedge):**
+                1. **Não tente adivinhar o fundo:** Não compre Calls "porque caiu muito".
+                2. **Proteção:** Se tiver carteira de ações, mantenha **Puts longas** ou venda Calls cobertas (OTM) para gerar caixa.
+                3. **Espere:** Aguarde o score voltar para > -0.5 para pensar em compras.
                 """)
             else:
-                st.info("ℹ️ **Mercado Equilibrado:** O viés não está extremo. Siga os sinais individuais da tabela abaixo com a mão padrão.")
+                st.info("ℹ️ **Mercado Equilibrado:** O viés não está extremo.")
+                st.markdown("Siga os sinais individuais da tabela abaixo com a gestão de risco padrão (1-2% por trade).")
 
 # ------------------------------------------------------------
 # 3. TABELA
@@ -372,15 +379,12 @@ if not df_results.empty:
         
         # Função de estilo que usa o índice para acessar o DF original (df_show)
         def apply_row_colors(row):
-            # Pega o índice da linha sendo estilizada
             idx = row.name 
-            # Acessa a cor correspondente no DataFrame original
             bg_color = df_show.loc[idx, "_cor_fundo"]
             text_color = df_show.loc[idx, "_cor_texto"]
             return [f'background-color: {bg_color}; color: {text_color}' for _ in row]
 
-        # Aplica o estilo apenas nas colunas visíveis
-        # ATENÇÃO: Passamos apenas as colunas visíveis para o style, mas a função lambda usa o índice para buscar a cor no df_show completo
+        # Aplica o estilo
         st.dataframe(
             df_show[cols_to_show].style.apply(apply_row_colors, axis=1),
             use_container_width=True,
