@@ -4,7 +4,8 @@ import pandas as pd
 import pandas_ta as ta
 import plotly.graph_objects as go
 import logging
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
+import calendar
 
 # ============================================================
 # CONFIGURAÇÕES GERAIS
@@ -45,6 +46,101 @@ PERIOD_OPTIONS = {
 }
 
 # ============================================================
+# FUNÇÕES DE CALENDÁRIO PARA EVENTOS MACRO
+# ============================================================
+
+def first_weekday(year: int, month: int, weekday: int) -> date:
+    """
+    Retorna a 1ª ocorrência de um dia da semana (0=Seg, 4=Sex, etc) no mês.
+    """
+    for day in range(1, 8):
+        d = date(year, month, day)
+        if d.weekday() == weekday:
+            return d
+    # fallback (não deve acontecer)
+    return date(year, month, 1)
+
+
+def last_weekday(year: int, month: int, weekday: int) -> date:
+    """
+    Retorna a última ocorrência de um dia da semana no mês.
+    """
+    _, last_day = calendar.monthrange(year, month)
+    for day in range(last_day, last_day - 7, -1):
+        d = date(year, month, day)
+        if d.weekday() == weekday:
+            return d
+    return date(year, month, last_day)
+
+
+def nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+    """
+    Retorna a n-ésima ocorrência de um dia da semana no mês.
+    Ex: 3ª quarta -> weekday=2 (quarta), n=3
+    """
+    first = first_weekday(year, month, weekday)
+    return first + timedelta(days=7 * (n - 1))
+
+
+def generate_macro_events(months_ahead: int = 6):
+    """
+    Gera automaticamente um calendário estimado de eventos macroeconômicos
+    para os próximos 'months_ahead' meses, a partir da data atual.
+
+    Regras:
+    - Payroll: 1ª sexta-feira do mês
+    - CPI: 2ª quarta-feira do mês
+    - PCE: última sexta-feira do mês
+    - FOMC (Decisão de Juros): 3ª quarta-feira a cada 2 meses (aproximação)
+    """
+    today = date.today()
+    events = []
+    current_year = today.year
+    current_month = today.month
+
+    for i in range(months_ahead):
+        # Calcula o mês/ano alvo
+        month = current_month + i
+        year = current_year + (month - 1) // 12
+        month = (month - 1) % 12 + 1
+
+        # Payroll: 1ª sexta-feira (weekday=4)
+        payroll_date = first_weekday(year, month, 4)
+        events.append({
+            "name": "Payroll",
+            "date": payroll_date.strftime("%Y-%m-%d"),
+            "impact": -2
+        })
+
+        # CPI: 2ª quarta-feira (weekday=2)
+        first_wed = first_weekday(year, month, 2)
+        cpi_date = first_wed + timedelta(days=7)
+        events.append({
+            "name": "CPI",
+            "date": cpi_date.strftime("%Y-%m-%d"),
+            "impact": -2
+        })
+
+        # PCE: última sexta-feira (weekday=4)
+        pce_date = last_weekday(year, month, 4)
+        events.append({
+            "name": "PCE",
+            "date": pce_date.strftime("%Y-%m-%d"),
+            "impact": -2
+        })
+
+        # FOMC: 3ª quarta-feira a cada 2 meses (aproximado, calendário estimado)
+        if i % 2 == 0:  # a cada dois meses, começando pelo mês atual
+            fomc_date = nth_weekday(year, month, 2, 3)  # 3ª quarta
+            events.append({
+                "name": "Decisão de Juros (FOMC)",
+                "date": fomc_date.strftime("%Y-%m-%d"),
+                "impact": -3
+            })
+
+    return events
+
+# ============================================================
 # MÓDULO DE RISCO MACRO (NEWS)
 # ============================================================
 
@@ -56,32 +152,17 @@ EVENT_GUIDE = {
     "PCE": "A medida de inflação preferida do Fed. \n- **Expectativa:** Confirma ou diverge do CPI. Impacto similar, mas às vezes menor.\n- **Ação:** Monitorar yields dos títulos de 10 anos (TNX).",
 }
 
-# Calendário Estimado (Baseado em padrões do FED/BLS para o período solicitado)
-MACRO_EVENTS = [
-    # DEZEMBRO 2025
-    {"name": "Payroll", "date": "2025-12-05", "impact": -2},
-    {"name": "CPI", "date": "2025-12-10", "impact": -2},
-    {"name": "Decisão de Juros (FOMC)", "date": "2025-12-17", "impact": -3}, 
-    
-    # JANEIRO 2026
-    {"name": "Payroll", "date": "2026-01-09", "impact": -2},
-    {"name": "CPI", "date": "2026-01-13", "impact": -2},
-    {"name": "Decisão de Juros (FOMC)", "date": "2026-01-28", "impact": -3}, 
-    
-    # FEVEREIRO 2026
-    {"name": "Payroll", "date": "2026-02-06", "impact": -2},
-    {"name": "CPI", "date": "2026-02-12", "impact": -2},
-    {"name": "PCE", "date": "2026-02-27", "impact": -2},
-]
+# Calendário estimado automaticamente para os próximos 6 meses
+MACRO_EVENTS = generate_macro_events(months_ahead=6)
 
 NEWS_WINDOW_DAYS = 3  # Dias de alerta antes do evento
+
 
 def get_macro_alerts(current_date: date):
     """Retorna alertas ativos e suas explicações."""
     if isinstance(current_date, pd.Timestamp):
         current_date = current_date.date()
-    
-    # Se não tiver data (ex: fim de semana), assume hoje
+
     if not current_date:
         current_date = datetime.now().date()
 
@@ -90,27 +171,34 @@ def get_macro_alerts(current_date: date):
         try:
             ev_date = datetime.strptime(ev["date"], "%Y-%m-%d").date()
             days_until = (ev_date - current_date).days
-            
+
             if 0 <= days_until <= NEWS_WINDOW_DAYS:
-                # Busca a explicação no dicionário
                 explanation = EVENT_GUIDE.get(ev["name"], "Alta volatilidade esperada.")
                 alerts.append({
                     "event": f"{ev['name']} ({ev['date']})",
                     "days": days_until,
                     "guide": explanation
                 })
-        except:
+        except Exception:
             continue
     return alerts
 
 # ============================================================
-# FUNÇÕES TÉCNICAS (ANALISE)
+# FUNÇÕES TÉCNICAS (ANÁLISE)
 # ============================================================
 
 @st.cache_data(ttl=CACHE_TTL)
 def get_data(tickers, period="1y", interval="1d"):
-    data = yf.download(tickers, period=period, interval=interval, group_by="ticker", auto_adjust=True, threads=True)
+    data = yf.download(
+        tickers,
+        period=period,
+        interval=interval,
+        group_by="ticker",
+        auto_adjust=True,
+        threads=True
+    )
     return data
+
 
 def get_ticker_df(raw_data, ticker):
     if raw_data is None or raw_data.empty:
@@ -124,35 +212,44 @@ def get_ticker_df(raw_data, ticker):
     else:
         return raw_data.dropna()
 
+
 def anti_po_filter(direction, df, ma20, ma50, ma200, rsi_series, atr_series):
+    """
+    Filtro simples anti-pó para evitar operações em condições extremas.
+    """
     try:
         price = df["Close"].iloc[-1]
         curr_rsi = rsi_series.iloc[-1]
         curr_atr = atr_series.iloc[-1]
         curr_atr_pct = curr_atr / price if price > 0 else 0.0
-        
+
         reasons = []
         ok = True
-        
+
+        # Volatilidade muito alta
         if curr_atr_pct > 0.06:
             ok = False
-            reasons.append("Volatilidade extrema")
+            reasons.append("Volatilidade extrema (ATR% > 6%)")
 
+        # RSI extremo contra a direção
         if direction == "bull" and curr_rsi > 75:
             ok = False
-            reasons.append("RSI Sobrecomprado (>75)")
+            reasons.append("RSI Sobrecomprado (> 75)")
         if direction == "bear" and curr_rsi < 25:
             ok = False
-            reasons.append("RSI Sobrevendido (<25)")
+            reasons.append("RSI Sobrevendido (< 25)")
 
-        if not reasons: return True, "-"
+        if not reasons:
+            return True, "-"
         return ok, "; ".join(reasons)
-    except:
+    except Exception:
         return True, "Erro Filtro"
+
 
 def analyze_ticker(ticker, df):
     try:
-        if df is None or df.empty or len(df) < MA_LONG + 5: return None
+        if df is None or df.empty or len(df) < MA_LONG + 5:
+            return None
 
         close = df["Close"]
         high = df["High"]
@@ -179,10 +276,10 @@ def analyze_ticker(ticker, df):
         motivo = "-"
         vencimento = "-"
         strike_alvo = "-"
-        cor_fundo = "#ffffff" 
+        cor_fundo = "#ffffff"
         cor_texto = "#000000"
         direction = "none"
-        score = 0 # Para o termômetro
+        score = 0  # para o termômetro
 
         # 1. ALTA
         if curr_price > curr_ma200 and curr_ma50 > curr_ma200:
@@ -193,7 +290,7 @@ def analyze_ticker(ticker, df):
                 strike_alvo = f"${curr_price:.0f} (ATM)"
                 cor_fundo = "#b6d7a8"
                 direction = "bull"
-                score = 2 # Alta forte
+                score = 2  # alta forte
             elif (curr_price <= curr_ma20 * (1 + PULLBACK_TOL)) and (RSI_LOW < curr_rsi < RSI_HIGH):
                 sugestao = "TRAVA DE ALTA (Call Spread)"
                 motivo = "Pullback (Correção)"
@@ -204,7 +301,7 @@ def analyze_ticker(ticker, df):
                 cor_fundo = "#38761d"
                 cor_texto = "#ffffff"
                 direction = "bull"
-                score = 1 # Alta moderada
+                score = 1  # alta moderada
 
         # 2. BAIXA
         elif curr_price < curr_ma200 and curr_ma50 < curr_ma200:
@@ -215,7 +312,7 @@ def analyze_ticker(ticker, df):
                 strike_alvo = f"${curr_price:.0f} (ATM)"
                 cor_fundo = "#ea9999"
                 direction = "bear"
-                score = -2 # Baixa forte
+                score = -2  # baixa forte
             elif (curr_price >= curr_ma20 * (1 - PULLBACK_TOL)) and (RSI_LOW < curr_rsi < RSI_HIGH):
                 sugestao = "TRAVA DE BAIXA (Put Spread)"
                 motivo = "Repique p/ Cair"
@@ -226,8 +323,9 @@ def analyze_ticker(ticker, df):
                 cor_fundo = "#990000"
                 cor_texto = "#ffffff"
                 direction = "bear"
-                score = -1 # Baixa moderada
+                score = -1  # baixa moderada
 
+        # Filtro anti-pó
         if direction == "none":
             filtro_ok = True
             motivo_filtro = "-"
@@ -242,7 +340,7 @@ def analyze_ticker(ticker, df):
             "Vencimento": vencimento,
             "Motivo": motivo,
             "Filtro_OK": filtro_ok,
-            "Score": score, # Para o termômetro
+            "Score": score,  # para o termômetro
             "_cor_fundo": cor_fundo,
             "_cor_texto": cor_texto
         }
@@ -274,12 +372,14 @@ if raw_data is not None and not raw_data.empty:
     # Verifica alertas macro
     current_date = raw_data.index[-1]
     alerts_to_show = get_macro_alerts(current_date)
-    
+
     for ticker in TICKERS:
         df_t = get_ticker_df(raw_data, ticker)
-        if df_t.empty: continue
+        if df_t.empty:
+            continue
         res = analyze_ticker(ticker, df_t)
-        if res: results.append(res)
+        if res:
+            results.append(res)
 
 df_results = pd.DataFrame(results)
 
@@ -299,7 +399,7 @@ if alerts_to_show:
     st.divider()
 else:
     st.success("✅ Cenário Macro livre de eventos críticos (FOMC/CPI/Payroll) nos próximos 3 dias.")
-    with st.expander("📅 Ver Próximos Eventos Relevantes"):
+    with st.expander("📅 Ver Próximos Eventos Relevantes (estimados)"):
         st.table(pd.DataFrame(MACRO_EVENTS))
 
 # ------------------------------------------------------------
@@ -308,31 +408,29 @@ else:
 if not df_results.empty:
     # Filtrar apenas sinais válidos para o termômetro
     df_valid = df_results[df_results["Filtro_OK"] == True].copy()
-    
+
     if not df_valid.empty:
         # Calcula a média dos scores (-2 a +2)
         avg_score = df_valid["Score"].mean()
-        
+
         st.divider()
         st.subheader("🌡️ Termômetro de Sentimento do Mercado")
-        
+
         col_term, col_prot = st.columns([1, 2])
-        
+
         with col_term:
-            # Exibe o valor do score
             label = "NEUTRO"
             delta_color = "off"
-            if avg_score > 0.5: 
+            if avg_score > 0.5:
                 label = "VIÉS DE ALTA"
-                delta_color = "normal" # Verde
-            elif avg_score < -0.5: 
+                delta_color = "normal"  # verde
+            elif avg_score < -0.5:
                 label = "VIÉS DE BAIXA"
-                delta_color = "inverse" # Vermelho
-            
+                delta_color = "inverse"  # vermelho
+
             st.metric("Sentimento Agregado", f"{label} ({avg_score:.2f})", delta=avg_score, delta_color=delta_color)
-        
+
         with col_prot:
-            # Lógica de Proteção (Hedge)
             if avg_score > 1.0:
                 st.warning("⚠️ **ALERTA DE EUFORIA (Mercado Esticado):** Risco de correção.")
                 st.markdown("""
@@ -351,45 +449,92 @@ if not df_results.empty:
                 """)
             else:
                 st.info("ℹ️ **Mercado Equilibrado:** O viés não está extremo.")
-                st.markdown("Siga os sinais individuais da tabela abaixo com a gestão de risco padrão (1-2% por trade).")
+                st.markdown("Siga os sinais individuais da tabela abaixo com a gestão de risco padrão (1–2% por trade).")
 
 # ------------------------------------------------------------
-# 3. TABELA
+# 3. TABELA DE OPORTUNIDADES
 # ------------------------------------------------------------
     st.divider()
     if df_valid.empty:
         st.warning("Nenhum ativo passou nos filtros de segurança hoje.")
     else:
         st.subheader(f"Oportunidades ({len(df_valid)})")
-        
+
         opcoes = df_valid["Estratégia"].unique()
-        filtro = st.sidebar.multiselect("Filtrar Estratégia:", opcoes, default=[x for x in opcoes if x != "Aguardar"])
-        
+        filtro = st.sidebar.multiselect(
+            "Filtrar Estratégia:",
+            opcoes,
+            default=[x for x in opcoes if x != "Aguardar"]
+        )
+
         if filtro:
             df_show = df_valid[df_valid["Estratégia"].isin(filtro)].copy()
         else:
             df_show = df_valid.copy()
 
-        # Reset Index para 1, 2, 3...
         df_show.reset_index(drop=True, inplace=True)
         df_show.index = df_show.index + 1
-        
-        # Colunas para exibir (apenas as colunas finais visíveis)
+
         cols_to_show = ["Ticker", "Preço", "Estratégia", "Strikes (Ref)", "Vencimento", "Motivo"]
-        
-        # Função de estilo que usa o índice para acessar o DF original (df_show)
+
         def apply_row_colors(row):
-            idx = row.name 
+            idx = row.name
             bg_color = df_show.loc[idx, "_cor_fundo"]
             text_color = df_show.loc[idx, "_cor_texto"]
             return [f'background-color: {bg_color}; color: {text_color}' for _ in row]
 
-        # Aplica o estilo
         st.dataframe(
             df_show[cols_to_show].style.apply(apply_row_colors, axis=1),
             use_container_width=True,
             height=600
         )
+
+        # ------------------------------------------------------------
+        # 5. HEDGES (SEGUROS)
+        # ------------------------------------------------------------
+        st.divider()
+        st.subheader("🛡️ Hedges recomendados (seguros para o portfólio)")
+
+        if not df_results.empty:
+
+            avg_score_all = df_results[df_results["Filtro_OK"] == True]["Score"].mean()
+
+            if avg_score_all > 0.5:
+                hedge_side = "bear"
+                hedge_assets = [
+                    ("VXX", "Compra de PUT no SPY é cara – compre CALL longa de VXX"),
+                    ("UVXY", "CALL longa (60-120 dias)"),
+                    ("GLD", "CALL moderada (90 dias)"),
+                    ("TLT", "CALL moderada (90 dias)"),
+                    ("UUP", "CALL longa")
+                ]
+            elif avg_score_all < -0.5:
+                hedge_side = "bull"
+                hedge_assets = [
+                    ("SPY", "CALL longa (ATM ou leve OTM, 60-120 dias)"),
+                    ("QQQ", "CALL longa"),
+                    ("XLE", "CALL longa"),
+                    ("SLV", "CALL longa"),
+                    ("XLF", "CALL longa")
+                ]
+            else:
+                hedge_side = "neutral"
+                hedge_assets = [
+                    ("VXX", "CALL longa"),
+                    ("GLD", "CALL moderada"),
+                    ("TLT", "CALL moderada (60-120 dias)")
+                ]
+
+            df_hedge = pd.DataFrame(hedge_assets, columns=["Ativo", "Estratégia sugerida"])
+
+            st.dataframe(
+                df_hedge,
+                use_container_width=True,
+                height=280
+            )
+
+        else:
+            st.info("Sem dados para analisar hedges no momento.")
 
 else:
     st.error("Erro ao carregar dados.")
@@ -410,12 +555,38 @@ if sel and raw_data is not None:
             donchian = df_chart["High"].rolling(window=DONCHIAN_LEN).max()
 
             fig = go.Figure()
-            fig.add_trace(go.Candlestick(x=df_chart.index, open=df_chart["Open"], high=df_chart["High"], low=df_chart["Low"], close=df_chart["Close"], name="Preço"))
-            fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart["MA20"], line=dict(color='orange', width=1), name="MA20"))
-            fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart["MA50"], line=dict(color='blue', width=2), name="MA50"))
-            fig.add_trace(go.Scatter(x=df_chart.index, y=donchian, line=dict(color='green', width=1, dash='dot'), name="Topo 20d"))
-            
-            fig.update_layout(xaxis_rangeslider_visible=False, title=f"{sel} - Diário", height=600)
+            fig.add_trace(go.Candlestick(
+                x=df_chart.index,
+                open=df_chart["Open"],
+                high=df_chart["High"],
+                low=df_chart["Low"],
+                close=df_chart["Close"],
+                name="Preço"
+            ))
+            fig.add_trace(go.Scatter(
+                x=df_chart.index,
+                y=df_chart["MA20"],
+                line=dict(color='orange', width=1),
+                name="MA20"
+            ))
+            fig.add_trace(go.Scatter(
+                x=df_chart.index,
+                y=df_chart["MA50"],
+                line=dict(color='blue', width=2),
+                name="MA50"
+            ))
+            fig.add_trace(go.Scatter(
+                x=df_chart.index,
+                y=donchian,
+                line=dict(color='green', width=1, dash='dot'),
+                name="Topo 20d"
+            ))
+
+            fig.update_layout(
+                xaxis_rangeslider_visible=False,
+                title=f"{sel} - Diário",
+                height=600
+            )
             st.plotly_chart(fig, use_container_width=True)
     except Exception as e:
         st.error(f"Erro no gráfico: {e}")
